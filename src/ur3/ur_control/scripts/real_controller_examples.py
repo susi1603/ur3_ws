@@ -1,255 +1,500 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*- 
+# -*- coding: utf-8 -*-
 
-from ur_control import transformations
-from ur_control.arm import Arm
-import argparse
-import rospy
-import timeit
-import numpy as np
-import tf
+# ==============================================================================#
+# real_controller_examples.py                                                   #
+# ==============================================================================#
+#                                                                               #
+# DESCRIPTION:                                                                  #
+# This script controls the movements of a UR robotic arm, making use of the     #
+# ROS (Robot Operating System) environment. It contains functionalities for     #
+# moving the arm to predefined joint positions, controlling the end-effector,   #
+# and managing the digital output state related to the robotic gripper.         #
+# The code does not only enable movements, but callibration and presentation    #
+# routines as well                                                              #
+#                                                                               #
+#                                                                               #
+# AUTHORS:                                                                      #
+# - cambel (source code, drivers and overall ROS workspace)                     #
+# - susi1603                                                                    #
+# - riaj0224                                                                    #
+#                                                                               #
+# DATE : June 1st, 2023                                                         #
+#                                                                               #
+# VERSION: 1.0                                                                  #
+#                                                                               #
+# REQUIREMENTS:                                                                 #
+# This script requires Python 2.x and the following Python libraries:           #
+# - ur_control                                                                  #
+# - argparse                                                                    #
+# - rospy                                                                       #
+# - timeit                                                                      #
+# - numpy                                                                       #
+# - tf                                                                          #
+#                                                                               #
+# NOTES:                                                                        #
+# Please refer to the documentation to see full instalation and integration     #
+#                                                                               #
+# ==============================================================================#
+
+
+
+
+#===============================================================================#
+# SECTION: Imports                                                              #
+# DESCRIPTION: These libraries provide a diverse set of tools for building a    # 
+#              Python-based control system for a UR robotic arm, likely in a    #
+#              ROS (Robot Operating System) environment.                        #
+# INPUTS: N/A                                                                   #
+# OUTPUTS: N/A                                                                  #
+#===============================================================================#
+
+from ur_control import transformations                                          # Customlibrary related to controlling a UR (Universal 
+                                                                                # Robots) robot: library which handles various mathematical
+                                                                                # transformations, like positioning and orienting the robot 
+                                                                                # in 3D space.
+                                                                                
+from ur_control.arm import Arm                                                  # Library that specifically deals with the control and 
+                                                                                # operation of a robotic arm.
+                                                                                 
+import argparse                                                                 # This is a standard Python library used for writing 
+                                                                                # user-friendly command-line interfaces. It parses 
+                                                                                # arguments and options from sys.argv, which are the 
+                                                                                # command-line arguments passed to a Python script.
+
+import rospy                                                                    # Python library for ROS, used for interfacing with the 
+                                                                                # ROS system                                 
+
+import timeit                                                                   # provides tools for timing Python code execution, which 
+                                                                                # can be important for performance tuning and optimization
+                                                                                #  in real-time systems like robotics. 
+
+import numpy as np                                                              #  library for numerical computation in Python. It is used 
+                                                                                # heavily in scientific computing and likely powers a lot 
+                                                                                # of the mathematical operations in the system, such as 
+                                                                                # the transformations for the UR robot.
+
+import tf                                                                       # Manages the relationships between different coordinate 
+                                                                                # frames over time, which is crucial for keeping track of 
+                                                                                # the robot's position and orientation in 3D space.
+
 np.set_printoptions(suppress=True)
 np.set_printoptions(linewidth=np.inf)
-from ur_msgs.srv import *
-import sys
 
+from ur_msgs.srv import *                                                       # Provides ROS service definitions specific to UR robots, 
+                                                                                # facilitating communication between different parts of the
+                                                                                #  ROS system
+
+import sys                                                                      # Provides tools for interacting with the Python runtime 
+                                                                                # environment, which can be used for various purposes 
+                                                                                # such as managing program flow and handling 
+                                                                                # system-specific parameters.
+
+#===============================================================================#
+# CLASS: DigitalOutputManager                                                   #
+# DESCRIPTION: This class manages digital output for a UR robotic arm. It       #
+#              sets initial pin states, allows toggling of digital output, and  #
+#              restarts the toggling process.                                   #
+# INPUTS: initial_states - initial pins                                         #
+# OUTPUTS: N/A                                                                  #
+#===============================================================================#
 
 class DigitalOutputManager:
+
+    #===============================================================================#
+    # FUNCTION: __init__                                                            #
+    # DESCRIPTION: Initializes the DigitalOutputManager object by setting the       #
+    #              initial states of the pins, making service calls to set the      #
+    #              digital outputs to the initial states, and send a step train     #
+    # INPUTS: initial_states - initial pin states                                   #
+    # OUTPUTS: N/A                                                                  #
+    #===============================================================================#
     def __init__(self, initial_states):
-        self.pin_states = initial_states     #0,1,0: enable, direccion, steps
-        self.pins = [0, 1, 2]                                                   
-        self.toggle_count = 0 
-        self.rate = rospy.Rate(5000)
 
+        self.pin_states = initial_states                                            # Array[3]: enable, direction, steps
+        self.pins = [0, 1, 2]                                                       # Array[3]: Selected pins (digital outputs)                            
+        self.toggle_count = 0                                                       # Software enabler for toggling 
+        self.rate = rospy.Rate(5000)                                                # Frequency for step train: 5000 Hz -> 1 edge
+                                                                                    # Period: 200ms x 2 (rising + falling edge) = 400ms
+                                                                                    
+        # First it is necessary to reflect the pins' initial states into the hardware,
+        # and since the step train can wait, we first set the enable and direction pins
         for i in range(2):
-            rospy.wait_for_service('/ur_hardware_interface/set_io')                                        
+            rospy.wait_for_service('/ur_hardware_interface/set_io')                 # Search for service                                  
         try:
-            set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)                        
-            resp = set_io(fun=1, pin=i, state=self.pin_states[i])
+            set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)     # Stablish connection and define message type             
+            resp = set_io(fun=1, pin=i, state=self.pin_states[i])                   # Set values
             # print(resp.success)                                                
-        except rospy.ServiceException as e: 
-            print("primero")                                    
-            print("Service call failed: %s" % e)      
+        except rospy.ServiceException as e:                                         # In case of error showcase error message
+            print("Service call failed: %s" % e) 
 
-        # self.timer = rospy.Timer(rospy.Duration(1), self.timer_callback) 
+        # Next, just to ensure a good connection we connect again to the service to send 
+        # the step train
+        rospy.wait_for_service('/ur_hardware_interface/set_io')                     # Search for service
 
-        rospy.wait_for_service('/ur_hardware_interface/set_io')                                        
         try:
-            set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)                        
-            if (self.toggle_count == 0):
-                for i in range(800):
-                    resp = set_io(fun=1, pin=2, state=self.pin_states[2])
-                    # rospy.sleep(0.0005)
-                    self.rate.sleep()
+            set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)     # Stablish connection and define message type
+
+            if (self.toggle_count == 0):                                            # Condition for software enabler
+
+                for i in range(800):                                                # Number of edges to send
+                    resp = set_io(fun=1, pin=2, state=self.pin_states[2])           # Set new values to generate step train
+
+                    # rospy.sleep(0.0005)                                           # Alternative for next line, not that precise
+                    self.rate.sleep()                                               # Sleep for stablished period
+                                                                                    
+                                                                                    # Toggle step value
                     if self.pin_states[2] == 1.0:
                         self.pin_states[2] = 0.0
                     elif self.pin_states[2] == 0.0:
                         self.pin_states[2] = 1.0 
-                    # print("i:")
-                    # print(str(i))
-                    # print("state:")
-                    # print(self.pin_states[2])
-                # return resp.success   
-                self.toggle_count=1                                             
-        except rospy.ServiceException as e: 
-            # print("primero")                                    
-            print("Service call failed: %s" % e)      
+
+                self.toggle_count=1                                                 # Stop software enabler 
+
+        except rospy.ServiceException as e:                                         # In case of error
+            print("Service call failed: %s" % e)                                    # Showcase error
 
 
+    #===============================================================================#
+    # FUNCTION: toggle_digital_output                                               #
+    # DESCRIPTION: Toggles the digital output by making a service call to change the#
+    #              digital output state of pin 2 n-times.                           #
+    # INPUTS: N/A                                                                   #
+    # OUTPUTS: N/A                                                                  #
+    #===============================================================================#
     def toggle_digital_output(self):
 
-        if self.pin_states[2] == 1.0:
-            self.pin_states[2] = 0.0
-        elif self.pin_states[2] == 0.0:
-            self.pin_states[2] = 1.0    
+        rospy.wait_for_service('/ur_hardware_interface/set_io')                     # Search for service
 
-        # rospy.wait_for_service('/ur_hardware_interface/set_io')                                        
         try:
-            set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)                        
-            resp = set_io(fun=1, pin=2, state=self.pin_states[2])
-            # return resp.success                                                
-        except rospy.ServiceException as e:  
-            print("segundo") 
-            print(str(self.toggle_count))                                    
-            print("Service call failed: %s" % e)
+            set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)     # Stablish connection and define message type
 
-    def timer_callback(self, event):
-        print(str(self.toggle_count))                                    
+            if (self.toggle_count == 0):                                            # Condition for software enabler
 
-        if self.toggle_count >= 33:                                             # Rotate x degrees: degrees x 0.5555555
-            self.timer.shutdown()
-            return
+                for i in range(800):                                                # Number of edges to send
+                    resp = set_io(fun=1, pin=2, state=self.pin_states[2])           # Set new values to generate step train
 
-        # Cambia el estado de los pines
-        # self.toggle_digital_output(self.pins[2])                                # Which pin to toggle
-        self.toggle_digital_output()  
+                    # rospy.sleep(0.0005)                                           # Alternative for next line, not that precise
+                    self.rate.sleep()                                               # Sleep for stablished period
+                                                                                    
+                                                                                    # Toggle step value
+                    if self.pin_states[2] == 1.0:
+                        self.pin_states[2] = 0.0
+                    elif self.pin_states[2] == 0.0:
+                        self.pin_states[2] = 1.0 
 
-        # Incrementa la cuenta de cambios de estado
-        self.toggle_count += 1                                                  # Counter
+                self.toggle_count=1                                                 # Stop enabler 
 
+        except rospy.ServiceException as e:                                         # In case of error
+            print("Service call failed: %s" % e)                                    # Showcase error
+   
+
+    #===============================================================================#
+    # FUNCTION: restart_toggling                                                    #
+    # DESCRIPTION: Resets the toggling process by setting the toggle_count to 0 and #
+    #              changing the direction of the gripper.                           #
+    # INPUTS: N/A                                                                   #
+    # OUTPUTS: N/A                                                                  #
+    #===============================================================================#
     def restart_toggling(self):
-        # Reinicia el contador de cambios de estado y el Timer
-        self.toggle_count = 0                                                   # Restart process
-        self.initial_states[1] = not self.initial_states[1]                     # Change direction of the gripper
-        self.timer = rospy.Timer(rospy.Duration(0.001), self.timer_callback)    # Excecute toggle function
+        self.toggle_count = 0                                                       # Re-enable software enabler
+
+                                                                                    # Change direction of the gripper
+        if self.pin_states[1] == 1.0:
+            self.pin_states[1] = 0.0
+        elif self.pin_states[1] == 0.0:
+            self.pin_states[1] = 1.0                                                
+
+        rospy.wait_for_service('/ur_hardware_interface/set_io')                     # Search for service                                  
+        try:
+            set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)     # Stablish connection and define message type                      
+            resp = set_io(fun=1, pin=1, state=self.pin_states[1])                   # Set values
+            # print(resp.success)                                                
+        except rospy.ServiceException as e:                                         # In case of error showcase error message
+            print("Service call failed: %s" % e) 
+
+        self.toggle_digital_output()                                                # Excecute toggle function
 
 
+#===============================================================================#
+# FUNCTION: move_joints                                                         #
+# DESCRIPTION: This function commands the robot arm to move to a specific set of#
+#              joint positions. After the move, it initializes the              #
+#              DigitalOutputManager, likely controlling a gripper.              #
+# INPUTS: wait (optional) - If true, the function will wait for the arm to      #
+#                           reach the position before proceeding. Default is    #
+#                           True                                                #
+# OUTPUTS: N/A                                                                  #
+#===============================================================================#
 def move_joints(wait=True):
-    q = [-0.0916, -1.971, 2.187, -3.358, -1.626, 0.176]
-    arm.set_joint_positions(position=q, wait=wait, t=0.5)
-    rospy.sleep(2.0)
-    print("MOVIENDO gripper")
-    digital_output_manager = DigitalOutputManager([0.0, 0.0, 0.0])       
-    print("TERMINÓ de mover gripper")
+    q = [-0.0916, -1.971, 2.187, -3.358, -1.626, 0.176]                         # 'q' holds the desired joint positions for the robot 
+                                                                                # arm in radians
+    
+    arm.set_joint_positions(position=q, wait=True, t=1.0)                       # Command the robot arm to move to the joint positions 
+                                                                                # defined in 'q'.The robot is set to move to the joint
+                                                                                #  positions within a time frame of 0.5 seconds
+                                                                                # If 'wait' is true, it will block the execution 
+                                                                                # until the robot has moved to the desired positions
+
+    rospy.sleep(2.0)                                                            # Pause execution for 2 seconds
 
 
-def follow_trajectory():
-    traj = [
-        [2.4463, -1.8762, -1.6757, 0.3268, 2.2378, 3.1960],
-        [2.5501, -1.9786, -1.5293, 0.2887, 2.1344, 3.2062],
-        [2.5501, -1.9262, -1.3617, 0.0687, 2.1344, 3.2062],
-        [2.4463, -1.8162, -1.5093, 0.1004, 2.2378, 3.1960],
-        [2.3168, -1.7349, -1.6096, 0.1090, 2.3669, 3.1805],
-        [2.3168, -1.7997, -1.7772, 0.3415, 2.3669, 3.1805],
-        [2.3168, -1.9113, -1.8998, 0.5756, 2.3669, 3.1805],
-        [2.4463, -1.9799, -1.7954, 0.5502, 2.2378, 3.1960],
-        [2.5501, -2.0719, -1.6474, 0.5000, 2.1344, 3.2062],
-    ]
-    for t in traj:
-        arm.set_joint_positions(position=t, wait=True, t=1.0)
+#===============================================================================#
+# FUNCTION: move_joints2                                                        #
+# DESCRIPTION: This function commands the robot arm to move to a specific set of#
+#              joint positions. After the move, it initializes the              #
+#              DigitalOutputManager, likely controlling a gripper.              #
+# INPUTS: wait (optional) - If true, the function will wait for the arm to      #
+#                           reach the position before proceeding. Default is    #
+#                           True                                                #
+#         position: position selector                                           #
+# OUTPUTS: N/A                                                                  #
+#===============================================================================#
+def move_joints2(position,wait=True):
+    
+    if position == 1:
+        q = [0.557, -1.131, 2.021, -4.009,-1.626 , 0.176]                       # 'q' holds the desired joint positions for the robot 
+                                                                                # arm in radians
+    if position == 2:
+       q = [-0.069, -1.678, 1.747, -3.226,-1.621 , 0.168]                       # 'q' holds the desired joint positions for the robot 
+                                                                                # arm in radians
+    
+    arm.set_joint_positions(position=q, wait=True, t=1.0)                       # Command the robot arm to move to the joint positions 
+                                                                                # defined in 'q'.The robot is set to move to the joint
+                                                                                #  positions within a time frame of 0.5 seconds
+                                                                                # If 'wait' is true, it will block the execution 
+                                                                                # until the robot has moved to the desired positions
 
+    rospy.sleep(2.0)                                                            # Pause execution for 2 seconds
 
+#===============================================================================#
+# FUNCTION: move_endeffector                                                    #
+# DESCRIPTION: This function aims to move the robot arm's end-effector based on #
+#              specific transformations. It corrects the position based on      #
+#              camera and gripper offsets, and also allows for control of a     #
+#              gripper using DigitalOutputManager.                              #      
+# INPUTS: wait (optional) - If true, the function will wait for the arm to reach#
+#                           the position before proceeding. Default is True.    #
+# OUTPUTS: N/A                                                                  #
+#===============================================================================#
 def move_endeffector(wait=True):
-    cpose = arm.end_effector()
-    listener = tf.TransformListener()
+    
+    # Set initial values for the end-effector of the arm to reach the desired
+    # position
+    cpose = arm.end_effector()                                                  # Get the current position of the end effector
 
-    rate = rospy.Rate(10.0)
-    d_cam_corr_x = -0.0678
+    listener = tf.TransformListener()                                           # Instantiate a TransformListener object which
+                                                                                # is used to receive transform information over 
+                                                                                # time
+
+    rate = rospy.Rate(10.0)                                                     # Set the rate of loop execution
+
+                                                                                # Define various correction offsets
+    d_cam_corr_x = -0.0678                                                     
     d_cam_corr_y = -0.0254
+
     corr_gripper_y = 0.145
     corr_gripper_x = -0.09
     corr_gripper_z = 0.07
 
+    # Define the transformation matrices and search for the transform between 
+    # the ArUCo and the base
+    while not rospy.is_shutdown():                                              # Main loop runs until the ROS node is shut down
+                                                                                # while continously searching for the transform
 
-    while not rospy.is_shutdown():
-        # for i in range(10):
         try:
-            # cpose = [transAruco[0]+d_cam_corr_x+corr_gripper_x, transAruco[1]+d_cam_corr_y+corr_gripper_y, transAruco[2]+corr_gripper_z, rotEE[0], rotEE[1], rotEE[2], rotEE[3]]
-            (transAruco,rotAruco) = listener.lookupTransform('/base_link', '/aruco_marker_frame', rospy.Time(0))
-            (transEE,rotEE) = listener.lookupTransform('/base_link', '/wrist_3_link', rospy.Time(0))
+            (transAruco,rotAruco) = listener.lookupTransform('/base_link', '/aruco_marker_frame', rospy.Time(0)) 
+                                                                                # Get the transform 
+                                                                                # between '/base_link' 
+                                                                                # and '/aruco_marker_frame' 
+                                                                                # and '/wrist_3_link' frames
+
+            #(transEE,rotEE) = listener.lookupTransform('/base_link', '/wrist_3_link', rospy.Time(0))
             
-            Zpose = arm.end_effector()
-            # print("current pose")
-            # print(Zpose)
-            # print("transEE")
-            # print(transEE)
-            # print("rotEE")
-            # print(rotEE)
+            Zpose = arm.end_effector()                                          # Get the current end effector position
 
-            # Zpose = [Zpose[0], Zpose[1], transAruco[2]+corr_gripper_z, Zpose[3], Zpose[4], Zpose[5], Zpose[6]]
-            # print("Va a moverse en Z")
-            # arm.set_target_pose(pose=Zpose, wait=True, t=1.0)
-            # Ypose = arm.end_effector()
-            # Ypose = [Ypose[0], transAruco[1]+d_cam_corr_y+corr_gripper_y, Ypose[2],  Ypose[3], Ypose[4], Ypose[5], Ypose[6]]
-            # print("Va a moverse en Y")
-            # arm.set_target_pose(pose=Ypose, wait=True, t=1.0)
-            # Xpose = arm.end_effector()
-            # Xpose = [transAruco[0]+d_cam_corr_x+corr_gripper_x, Xpose[1], Xpose[2],  Xpose[3], Xpose[4], Xpose[5], Xpose[6]]
-            # print("Va a moverse en X")
-            # arm.set_target_pose(pose=Xpose, wait=True, t=1.0)
+            print(transAruco)                                                   # Print the position in space to which 
+                                                                                # the robot is going to move
 
-            Zpose = [transAruco[0]+d_cam_corr_x+corr_gripper_x, transAruco[1]+d_cam_corr_y+corr_gripper_y, transAruco[2]+corr_gripper_z, Zpose[3], Zpose[4], Zpose[5], Zpose[6]]
+            x1 = transAruco[0]+d_cam_corr_x+corr_gripper_x
+            dx1 = dynamic_x_offset(x1)
+
+            y1 = transAruco[1]+d_cam_corr_y+corr_gripper_y
+            z1 = transAruco[2]+corr_gripper_z 
+            dy1 = dynamic_y_offset(y1,z1)
+            dz1 =  dynamic_z_offset(y1,z1)
+
+            # Apply correction offsets to the transform of the ArUco marker and set it as the new target pose
+            # NOTE: Whhile callibrating, uncomment the second line 
+            Zpose = [x1-dx1, y1-dy1, z1-dz1, Zpose[3], Zpose[4], Zpose[5], Zpose[6]]
+            #Zpose = [transAruco[0]+d_cam_corr_x+corr_gripper_x, transAruco[1]+d_cam_corr_y+corr_gripper_y, transAruco[2]+corr_gripper_z, Zpose[3], Zpose[4], Zpose[5], Zpose[6]]
+            
+            
+            print(Zpose)                                                        # Print pose just as a control measure 
             print("Va a moverse")
-            arm.set_target_pose(pose=Zpose, wait=True, t=1.0)
-
+            move_joints2(2)                                                     # Move to focal point as a control measure 
+            arm.set_target_pose(pose=Zpose, wait=True, t=1.0)                   # Then move to objective
             print("Terminó de moverse")
-            print("MOVIENDO gripper")
-            rospy.sleep(2.0)
-            digital_output_manager = DigitalOutputManager([0.0, 1.0, 0.0])       
-            print("TERMINÓ de mover gripper")
-            rospy.sleep(2.0)
+
+            return                                                              # Finish function
+
+        # Handle exceptions related to transforms
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-            print("NO se va a mover. NO encontró tf")
+            #print("NO se va a mover. NO encontró tf")
             continue
         rate.sleep()
 
-    # cpose_rot = 0.51339687 -0.50204173  0.49461101 -0.48963016
-    # cpose = [0.31039883, -0.26478611, 0.32612011, 0.54907157, 0.48249772, 0.50090525, 0.4634763]
-    # arm.set_target_pose(pose=cpose, wait=True, t=1.0)
-    # 0.38132267  0.33066657  0.18569623 -0.45880805  0.53243781 -0.49661238  0.5092949
-    # rospy.wait_for_service('/ur_hardware_interface/set_io')  
-    # try:                                     
-    #     set_io = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)
-    #     resp = set_io(fun=1, pin=16, state=1)
-    #     return resp.success
-    # except rospy.ServiceException as e:                                     
-    #     print("Service call failed: %s" % e)
+#===============================================================================#
+# SECTION: Offset Functions                                                     #
+# DESCRIPTION: These functions provide dynamic offsets based on given           #
+#              coordinates, likely for compensating positional inaccuracies     #
+#              in a robotic arm control system.                                 #
+# INPUTS: x, y, z coordinates and optional parameters for offset calculations   #
+# OUTPUTS: Adjusted coordinate values                                           #
+#===============================================================================#
+def dynamic_x_offset(x_coordinate, i1 = 0.009, i2 =-0.117, i3 =-9.85 ):
+    # Function to dynamically offset the x-coordinate based on given parameters:
+    # param x_coordinate: The original x-coordinate (in meters)
+    # param i1: Coefficient for the quadratic term (default: 0.009)
+    # param i2: Coefficient for the linear term (default: -0.117)
+    # param i3: Constant term (default: -9.85)
+    # return: Adjusted x-coordinate value (in meters)
 
+    x_coordinate = x_coordinate*100
+    return ((i1*x_coordinate*x_coordinate + i2*x_coordinate + i3)/100)
 
-    # ## PRUEBAS GRIPPER
-    # print("ABRIENDO gripper")
-    # digital_output_manager = DigitalOutputManager([0.0, 0.0, 0.0])       
-    # print("TERMINÓ de mover gripper")
+def dynamic_y_offset(y_coordinate, z_coordinate, j1 = 0.345, j2 = -0.186, j3 =4.054):
+    # Function to dynamically offset the y-coordinate based on given parameters:
+    # param y_coordinate: The original y-coordinate (in meters)
+    # param z_coordinate: The original z-coordinate (in meters)
+    # param j1: Coefficient for the y-coordinate term (default: 0.345)
+    # param j2: Coefficient for the z-coordinate term (default: -0.186)
+    # param j3: Constant term (default: 4.054)
+    # return: Adjusted y-coordinate value (in meters)
 
-def move_gripper():
-    # very different than simulation
-    from robotiq_urcap_control.msg import Robotiq2FGripper_robot_input as inputMsg
-    from robotiq_urcap_control.msg import Robotiq2FGripper_robot_output as outputMsg
-    from robotiq_urcap_control.robotiq_urcap_control import RobotiqGripper
-    print("Connecting to gripper")
-    robot_ip = rospy.get_param("/ur_hardware_interface/robot_ip")
-    gripper = RobotiqGripper(robot_ip=robot_ip)
-    # The Gripper status is published on the topic named 'Robotiq2FGripperRobotInput'
-    pub = rospy.Publisher('Robotiq2FGripperRobotInput', inputMsg, queue_size=1)
+    y_coordinate = y_coordinate*100
+    z_coordinate = z_coordinate*100
+    return ((j1*y_coordinate + j2* z_coordinate+ j3)/100)
 
-    # The Gripper command is received from the topic named 'Robotiq2FGripperRobotOutput'
-    rospy.Subscriber('Robotiq2FGripperRobotOutput', outputMsg, gripper.send_command)
+def dynamic_z_offset(y_coordinate, z_coordinate, k1 = 0.216, k2 = 0.178, k3 =-6.764 ):
+    # Function to dynamically offset the z-coordinate based on given parameters:
+    # param y_coordinate: The original y-coordinate (in meters)
+    # param z_coordinate: The original z-coordinate (in meters)
+    # param k1: Coefficient for the y-coordinate term (default: 0.216)
+    # param k2: Coefficient for the z-coordinate term (default: 0.178)
+    # param k3: Constant term (default: -6.764)
+    # return: Adjusted z-coordinate value (in meters)
 
-    gripper.connect()
-    gripper.activate()
-    # gripper.move_and_wait_for_pos(position=100, speed=10, force=10)
-    # gripper.move_and_wait_for_pos(position=0, speed=10, force=10)
-    # gripper.move_and_wait_for_pos(position=255, speed=10, force=10)
-    gripper.disconnect()
+    z_coordinate = z_coordinate*100
+    y_coordinate = y_coordinate*100
+    return ((k1*y_coordinate+k2*z_coordinate + k3)/100)
 
+#===============================================================================#
+# SECTION: Calibration                                                          #
+# DESCRIPTION: This function performs a calibration process, moving the         #
+#              robotic arm to specific positions and pausing between movements. #
+# INPUTS: N/A                                                                   #
+# OUTPUTS: N/A                                                                  #
+#===============================================================================#
+def callibration():
+    for i in range(3):
+        move_joints()
+        print("Point %i:" % i)
+        move_endeffector()
+        rospy.sleep(30.0)
+    move_joints()
 
+#===============================================================================#
+# SECTION: Routine                                                              #
+# DESCRIPTION: This function performs a routine of movements and operations,    #
+#              controlling both the arm joints and end-effector, and managing   #
+#              the digital output state related to the robotic gripper.         #
+# INPUTS: N/A                                                                   #
+# OUTPUTS: N/A                                                                  #
+#===============================================================================#
+def routine():
+    digital_output_manager = DigitalOutputManager([0.0, 0.0, 0.0])
+    for i in range(4):
+        move_joints()
+        move_endeffector()
+        print("CERRANDO gripper")
+        rospy.sleep(1.0)
+        digital_output_manager.restart_toggling()       
+        print("TERMINÓ gripper")
+        rospy.sleep(1.0)
+        move_joints2(2)
+        move_joints2(1)
+        print("ABRIENDO gripper")
+        rospy.sleep(1.0)
+        digital_output_manager.restart_toggling()       
+        print("TERMINÓ gripper")
+    move_joints()
+
+#===============================================================================#
+# FUNCTION: main                                                                #
+# DESCRIPTION: This function is the main entry point for this script. It takes  #
+#              command line arguments for moving the robot arm and initializing #
+#              the arm object. It measures execution time for both real and ROS #
+#              system clocks.                                                   #
+# INPUTS: Command-line arguments                                                #
+#         -m/--move: If present, the robot will move to a joint configuration   #
+#         -e/--move_ee: If present, the robot end effector will be moved        #
+#         -c/--callibrate: If present, the robot will move to 3 points to allow #
+#                         calibration.                                          #     
+#         -r/--routine: If present, the robot will perform a full presentation  #
+#                         routine.                                              #
+# OUTPUTS: N/A                                                                  #
+# SIDE EFFECTS: Moves the robotic arm, prints the execution time                #
+#===============================================================================#
 def main():
     """ Main function to be run. """
+     # Instantiate an ArgumentParser object
     parser = argparse.ArgumentParser(description='Test force control')
+    
+
+    # Define command line arguments for the script
     parser.add_argument('-m', '--move', action='store_true',
                         help='move to joint configuration')
-    parser.add_argument('-t', '--move_traj', action='store_true',
-                        help='move following a trajectory of joint configurations')
+
     parser.add_argument('-e', '--move_ee', action='store_true',
                         help='move to a desired end-effector position')
-    parser.add_argument('-g', '--gripper', action='store_true',
-                        help='Move gripper')
-    parser.add_argument('-r', '--rotation', action='store_true',
-                        help='Rotation slerp')
-    parser.add_argument('--relative', action='store_true', help='relative to end-effector')
-    parser.add_argument('--rotation_pd', action='store_true', help='relative to end-effector')
-
+   
+    parser.add_argument('-c', '--callibrate', action='store_true',
+                        help='callibrate error in relation to a plane')
+    
+    parser.add_argument('-r', '--routine', action='store_true',
+                        help='show final demonstration')
+    # Parse the command line arguments
     args = parser.parse_args()
 
+    # Initialize the ROS node with name 'ur3e_script_control'
     rospy.init_node('ur3e_script_control')
-
+    
+    # Initialize the global 'arm' variable with an instance of Arm class
     global arm
     arm = Arm(
-        ft_sensor=True,  # get Force/Torque data or not
-        gripper=False,  # Enable gripper
+        ft_sensor=True,                                                         # get Force/Torque data or not
+        gripper=False,                                                          # Enable gripper
     )
-
+    
+    # Record the start time of execution in both real and ROS time
     real_start_time = timeit.default_timer()
     ros_start_time = rospy.get_time()
+
+    # Change execution depending on the parameters
     if args.move:
         move_joints()
-    if args.move_traj:
-        follow_trajectory()
+
     if args.move_ee:
         move_endeffector()
-    if args.gripper:
-        move_gripper()
 
+    if args.callibrate:
+        callibration()
+
+    if args.routine:
+        routine()
+
+    # Print the elapsed real time and ROS time
     print("real time", round(timeit.default_timer() - real_start_time, 3))
     print("ros time", round(rospy.get_time() - ros_start_time, 3))
 
